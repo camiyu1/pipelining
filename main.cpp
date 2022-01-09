@@ -1,12 +1,18 @@
+// Author: Yong Hak Lee (camiyu1@gmail.com)
+
 #include <glog/logging.h>
-#include <benchmark/benchmark.h>
 #include <mutex>
 #include <thread>
 #include <vector>
 #include <chrono>
+#include <condition_variable>
 #include <atomic>
+#include <utility>
+#include "util.hpp"
 
 std::mutex g_mutex;
+std::condition_variable g_cv;
+
 constexpr unsigned kMaxVal = 10000LL;
 
 int accum(int start, int end) {
@@ -17,84 +23,54 @@ int accum(int start, int end) {
   return sum;
 }
 
-BENCHMARK_MAIN();
-
-static void BM_THREAD_TEST1(benchmark::State& state) {
-  std::atomic<int> accumulate(0);
-  auto sum = [&](int start, int end) {
-    accumulate += accum(start, end);
-  };
-  FLAGS_logtostderr = true;
-
-  for (auto _ : state) {
-    accumulate = 0;
-    std::vector<std::thread> threads;
-    for (int i = 0; i < 10; ++i) {
-      threads.push_back(std::thread(sum, 0, 1000));
-    }
-    for (auto &tr : threads) {
-      if (tr.joinable()) {
-        tr.join();
-      }
-    }
-    if (accumulate != 4995000) {
-      LOG(INFO) << "Result: " << accumulate;
-    }
-  }
-}
-
-static void BM_THREAD_TEST2(benchmark::State& state) {
-  int accumulate(0);
-  auto sum = [&](int start, int end) {
-    std::unique_lock<std::mutex> ul(g_mutex);
-    accumulate += accum(start, end);
-  };
-  FLAGS_logtostderr = true;
-
-  for (auto _ : state) {
-    accumulate = 0;
-    std::vector<std::thread> threads;
-    for (int i = 0; i < 10; ++i) {
-      threads.push_back(std::thread(sum, 0, 1000));
-    }
-    for (auto &tr : threads) {
-      if (tr.joinable()) {
-        tr.join();
-      }
-    }
-    if (accumulate != 4995000) {
-      LOG(INFO) << "Result: " << accumulate;
-    }
-  }
-}
-
-BENCHMARK_WITH_UNIT(BM_THREAD_TEST1, benchmark::kNanosecond);
-BENCHMARK_WITH_UNIT(BM_THREAD_TEST2, benchmark::kNanosecond);
-
-#if 0
+constexpr int kNumIterations = 50;
 int main(int argc, char **argv) {
-  std::atomic<int> accumulate(0);
-  auto sum = [&](int start, int end) {
-    accumulate += accum(start, end);
+  Queue<std::pair<int, std::vector<int>>> in_queue;
+  std::atomic<bool> inputed = false;
+  std::atomic<int> count(0);
+
+  auto stepone = [&](int num_iter) {
+    std::lock_guard<std::mutex> lg(g_mutex);
+    LOG(INFO) << "Push " << num_iter << " case";
+    std::vector<int> input;
+    for (int i = 0; i < 10 * num_iter; ++i) {
+      input.push_back(i);
+    }
+    in_queue.Push(std::make_pair(num_iter, input));
+    inputed = true;
+    g_cv.notify_one();
   };
 
-  google::InitGoogleLogging(argv[0]);
-  FLAGS_logtostderr = true;
-
-  for (int j = 0; j < 10000; ++j) {
-    accumulate = 0;
-    std::vector<std::thread> threads;
-    for (int i = 0; i < 10; ++i) {
-      threads.push_back(std::thread(sum, 0, 1000));
-    }
-    for (auto &tr : threads) {
-      if (tr.joinable()) {
-        tr.join();
+  int sum;
+  auto steptwo = [&]() {
+    LOG(INFO) << "Step Two";
+    while (count < kNumIterations) {
+      std::unique_lock<std::mutex> ul(g_mutex);
+      g_cv.wait(ul, [&](){return inputed == true;});
+      while (!in_queue.Empty()) {
+        auto [num, pop_input] = in_queue.Pop();
+        sum = 0;
+        for (int i : pop_input) {
+          sum += i;
+        }
+        count++;
+        LOG(INFO) << "case " << num << " Result : " << sum;
       }
+      inputed = false;
+      LOG(INFO) << "Count : " << count << " " << in_queue.Count();
     }
-    if (accumulate != 4995000) {
-      LOG(INFO) << "Result: " << accumulate;
-    }
+  };
+
+  auto t2 = std::thread(steptwo);
+  std::vector<std::thread> threads;
+  for (int i = 0; i < kNumIterations; ++i) {
+    LOG(INFO) << i << " case inputed";
+    threads.push_back(std::thread(stepone, i));
   }
+
+  for (auto& tr : threads) {
+    tr.join();
+  }
+
+  t2.join();
 }
-#endif

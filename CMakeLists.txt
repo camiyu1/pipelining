@@ -16,6 +16,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(TARGET_SERVER pipeline)
 add_executable(${TARGET_SERVER}
   main.cpp
+  util.cpp
 )
 
 target_link_libraries(${TARGET_SERVER} PRIVATE glog benchmark::benchmark)
