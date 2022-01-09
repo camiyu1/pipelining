@@ -25,13 +25,16 @@ int accum(int start, int end) {
 
 constexpr int kNumIterations = 50;
 int main(int argc, char **argv) {
+  google::InitGoogleLogging(argv[0]);
+  FLAGS_logtostderr = true;
+
   Queue<std::pair<int, std::vector<int>>> in_queue;
   std::atomic<bool> inputed = false;
   std::atomic<int> count(0);
 
   auto stepone = [&](int num_iter) {
     std::lock_guard<std::mutex> lg(g_mutex);
-    LOG(INFO) << "Push " << num_iter << " case";
+    LOG(INFO) << "[Input Thread] Push " << num_iter << " case";
     std::vector<int> input;
     for (int i = 0; i < 10 * num_iter; ++i) {
       input.push_back(i);
@@ -43,7 +46,7 @@ int main(int argc, char **argv) {
 
   int sum;
   auto steptwo = [&]() {
-    LOG(INFO) << "Step Two";
+    LOG(INFO) << "[Process Thread]";
     while (count < kNumIterations) {
       std::unique_lock<std::mutex> ul(g_mutex);
       g_cv.wait(ul, [&](){return inputed == true;});
@@ -60,17 +63,21 @@ int main(int argc, char **argv) {
       LOG(INFO) << "Count : " << count << " " << in_queue.Count();
     }
   };
+  auto start = std::chrono::_V2::high_resolution_clock::now();
+  std::vector<std::thread> input_threads;
 
-  auto t2 = std::thread(steptwo);
-  std::vector<std::thread> threads;
+  auto process_thread = std::thread(steptwo);
   for (int i = 0; i < kNumIterations; ++i) {
     LOG(INFO) << i << " case inputed";
-    threads.push_back(std::thread(stepone, i));
+    input_threads.push_back(std::thread(stepone, i));
   }
 
-  for (auto& tr : threads) {
+  for (auto& tr : input_threads) {
     tr.join();
   }
+  process_thread.join();
+  auto end = std::chrono::_V2::high_resolution_clock::now();
 
-  t2.join();
+  auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+  LOG(INFO) << "Time elapsed (us) : " << us.count();
 }
